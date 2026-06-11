@@ -33,22 +33,8 @@ fn is_wayland_session() -> bool {
 }
 
 fn should_enable_tray() -> bool {
-    if env_flag_enabled("ANTIGRAVITY_DISABLE_TRAY") {
-        info!("Tray disabled by ANTIGRAVITY_DISABLE_TRAY");
-        return false;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if is_wayland_session() && !env_flag_enabled("ANTIGRAVITY_FORCE_TRAY") {
-            warn!(
-                "Linux Wayland session detected; disabling tray by default to avoid GTK/AppIndicator crashes. Set ANTIGRAVITY_FORCE_TRAY=1 to force-enable."
-            );
-            return false;
-        }
-    }
-
-    true
+    // Tray icon is permanently disabled
+    false
 }
 
 #[cfg(target_os = "linux")]
@@ -398,27 +384,8 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let tray_enabled = window
-                    .app_handle()
-                    .try_state::<AppRuntimeFlags>()
-                    .map(|flags| flags.tray_enabled)
-                    .unwrap_or(true);
-
-                if tray_enabled {
-                    let _ = window.hide();
-                    #[cfg(target_os = "macos")]
-                    {
-                        use tauri::Manager;
-                        window
-                            .app_handle()
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory)
-                            .unwrap_or(());
-                    }
-                    api.prevent_close();
-                }
-            }
+        .on_window_event(|_window, _event| {
+            // No tray: window close events are handled by OS default (app exits)
         })
         .invoke_handler(tauri::generate_handler![
             greet,

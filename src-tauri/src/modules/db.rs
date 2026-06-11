@@ -4,7 +4,13 @@ use std::path::PathBuf;
 
 fn get_antigravity_path(target_ide: Option<&str>) -> Option<PathBuf> {
     if let Ok(config) = crate::modules::config::load_app_config() {
-        if let Some(path_str) = config.antigravity_executable {
+        // Pick the right config path based on target_ide
+        let path_str = if target_ide == Some("ide") {
+            config.antigravity_ide_executable
+        } else {
+            config.antigravity_executable
+        };
+        if let Some(path_str) = path_str {
             let path = PathBuf::from(path_str);
             if path.exists() {
                 return Some(path);
