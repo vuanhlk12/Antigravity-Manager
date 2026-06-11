@@ -29,35 +29,32 @@ impl SystemIntegration for DesktopIntegration {
         }
 
         // 2. 智能决策：是否使用最新的系统 Keychain 凭据管理器方式存储 Token
-        let is_ide = target_ide == Some("ide");
         let mut use_keyring = false;
 
-        if !is_ide {
-            // 经典原生版：自动探测版本号
-            match version::get_antigravity_version(target_ide) {
-                Ok(ver) => {
-                    // 如果版本号 >= 2.0.0
-                    if version::compare_version(&ver.short_version, "2.0.0") != std::cmp::Ordering::Less {
-                        use_keyring = true;
-                        crate::modules::logger::log_info(&format!(
-                            "[Desktop] Detected Antigravity version {} >= 2.0.0, using system Keyring.",
-                            ver.short_version
-                        ));
-                    } else {
-                        crate::modules::logger::log_info(&format!(
-                            "[Desktop] Detected Antigravity version {} < 2.0.0, falling back to legacy SQLite injection.",
-                            ver.short_version
-                        ));
-                    }
-                }
-                Err(e) => {
-                    // 如果探测失败，为防止对最新版由于没有 storage.json 造成报错阻断，默认作为新凭据注入
+        // 检测版本号（对 native 和 IDE 都适用）
+        match version::get_antigravity_version(target_ide) {
+            Ok(ver) => {
+                // 如果版本号 >= 2.0.0
+                if version::compare_version(&ver.short_version, "2.0.0") != std::cmp::Ordering::Less {
                     use_keyring = true;
-                    crate::modules::logger::log_warn(&format!(
-                        "[Desktop] Failed to detect Antigravity version ({}), defaulting to system Keyring for robustness.",
-                        e
+                    crate::modules::logger::log_info(&format!(
+                        "[Desktop] Detected version {} >= 2.0.0, using system Keyring (target_ide={:?}).",
+                        ver.short_version, target_ide
+                    ));
+                } else {
+                    crate::modules::logger::log_info(&format!(
+                        "[Desktop] Detected version {} < 2.0.0, falling back to legacy SQLite injection (target_ide={:?}).",
+                        ver.short_version, target_ide
                     ));
                 }
+            }
+            Err(e) => {
+                // 如果探测失败，为防止对最新版由于没有 storage.json 造成报错阻断，默认作为新凭据注入
+                use_keyring = true;
+                crate::modules::logger::log_warn(&format!(
+                    "[Desktop] Failed to detect version ({}), defaulting to system Keyring for robustness (target_ide={:?}).",
+                    e, target_ide
+                ));
             }
         }
 
