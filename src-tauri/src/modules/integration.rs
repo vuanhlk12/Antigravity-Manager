@@ -61,7 +61,7 @@ impl SystemIntegration for DesktopIntegration {
         if use_keyring {
             // ================== 最新版 Antigravity 原生应用逻辑 (>= 2.0.0) ==================
             // 2.1 写入系统 Keychain/Keyring
-            write_to_system_keyring(account)?;
+            write_to_system_keyring(account, target_ide)?;
 
             // 2.2 原生应用可能没有 storage.json，但如果有的话，我们也可以尝试安全地写入设备 Profile，以兼容指纹信息
             if let Ok(storage_path) = device::get_storage_path(target_ide) {
@@ -125,7 +125,7 @@ impl SystemIntegration for DesktopIntegration {
 }
 
 /// 辅助方法：向宿主操作系统的 Keychain/Credentials Manager 写入 Token
-fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), String> {
+fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<&str>) -> Result<(), String> {
     // 1. 构建 Token 的 JSON Payload，并将过期时间戳格式化为符合 RFC3339 的带微秒格式
     let expiry_datetime = chrono::DateTime::from_timestamp(account.token.expiry_timestamp, 0)
         .unwrap_or_else(|| chrono::Utc::now());
@@ -167,15 +167,17 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
         let encoded_payload = STANDARD.encode(&payload_json);
         let full_keyring_value = format!("go-keyring-base64:{}", encoded_payload);
 
+        let account_name = if target_ide == Some("ide") { "antigravity-ide" } else { "antigravity" };
+
         // 2.1 macOS Keychain Access
         // 删除旧的
         let _ = Command::new("security")
-            .args(["delete-generic-password", "-s", "gemini", "-a", "antigravity"])
+            .args(["delete-generic-password", "-s", "gemini", "-a", account_name])
             .output();
 
         // 写入新的 (-A 参数允许所有本地应用免密码、无感直接读取凭据)
         let output = Command::new("security")
-            .args(["add-generic-password", "-s", "gemini", "-a", "antigravity", "-w", &full_keyring_value, "-A"])
+            .args(["add-generic-password", "-s", "gemini", "-a", account_name, "-w", &full_keyring_value, "-A"])
             .output()
             .map_err(|e| format!("Failed to execute security command: {}", e))?;
 
@@ -219,11 +221,12 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
             fn CredDeleteW(target_name: *const u16, type_: u32, flags: u32) -> i32;
         }
 
-        let target = "gemini:antigravity";
-        let user = "antigravity";
+        let account_key = if target_ide == Some("ide") { "antigravity-ide" } else { "antigravity" };
+        let target = format!("gemini:{}", account_key);
+        let user = account_key;
         let secret = payload_json.as_bytes();
 
-        let target_wide: Vec<u16> = std::ffi::OsStr::new(target)
+        let target_wide: Vec<u16> = std::ffi::OsStr::new(target.as_str())
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -264,8 +267,9 @@ fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), Strin
     {
         // 2.3 Linux Secret Service API
         use std::io::Write;
+        let linux_account = if target_ide == Some("ide") { "antigravity-ide" } else { "antigravity" };
         let mut child = Command::new("secret-tool")
-            .args(["store", "--label=gemini", "service", "gemini", "username", "antigravity"])
+            .args(["store", "--label=gemini", "service", "gemini", "username", linux_account])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
