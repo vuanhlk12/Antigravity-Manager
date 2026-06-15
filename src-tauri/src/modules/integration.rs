@@ -1,15 +1,19 @@
-use crate::modules::{process, db, device, version};
 use crate::models::Account;
+use crate::modules::{db, device, process, version};
 use std::fs;
 use std::process::Command;
 
 pub trait SystemIntegration: Send + Sync {
     /// 当切换账号时执行的系统层操作（如杀进程、写入文件、注入数据库）
-    async fn on_account_switch(&self, account: &crate::models::Account, target_ide: Option<&str>) -> Result<(), String>;
-    
+    async fn on_account_switch(
+        &self,
+        account: &crate::models::Account,
+        target_ide: Option<&str>,
+    ) -> Result<(), String>;
+
     /// 更新系统托盘（如果适用）
     fn update_tray(&self);
-    
+
     /// 发送系统通知
     fn show_notification(&self, title: &str, body: &str);
 }
@@ -20,9 +24,16 @@ pub struct DesktopIntegration {
 }
 
 impl SystemIntegration for DesktopIntegration {
-    async fn on_account_switch(&self, account: &crate::models::Account, target_ide: Option<&str>) -> Result<(), String> {
-        crate::modules::logger::log_info(&format!("[Desktop] Executing system switch for: {} (target_ide: {:?})", account.email, target_ide));
-        
+    async fn on_account_switch(
+        &self,
+        account: &crate::models::Account,
+        target_ide: Option<&str>,
+    ) -> Result<(), String> {
+        crate::modules::logger::log_info(&format!(
+            "[Desktop] Executing system switch for: {} (target_ide: {:?})",
+            account.email, target_ide
+        ));
+
         // 1. 先关闭外部正在运行的进程（无论是原生还是IDE，先安全关闭，避免文件或凭据冲突）
         if process::is_antigravity_running(target_ide) {
             process::close_antigravity(20, target_ide)?;
@@ -85,7 +96,7 @@ impl SystemIntegration for DesktopIntegration {
                 let backup_path = db_path.with_extension("vscdb.backup");
                 let _ = fs::copy(&db_path, &backup_path);
             }
-            
+
             db::inject_token(
                 &db_path,
                 &account.token.access_token,
@@ -98,7 +109,7 @@ impl SystemIntegration for DesktopIntegration {
                 account.token.oauth_client_key.as_deref(),
                 target_ide,
             )?;
-            
+
             // 2.4 同步 Service Machine ID 到数据库
             if let Some(ref profile) = account.device_profile {
                 let _ = db::write_service_machine_id(&db_path, &profile.mac_machine_id);
@@ -107,10 +118,10 @@ impl SystemIntegration for DesktopIntegration {
 
         // 3. 重启外部进程
         process::start_antigravity(target_ide)?;
-        
+
         // 4. 更新托盘
         let _ = crate::modules::tray::update_tray_menus(&self.app_handle);
-        
+
         Ok(())
     }
 
@@ -153,7 +164,8 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
             expiry: expiry_str,
         },
         auth_method: "consumer".to_string(),
-    }).map_err(|e| format!("Failed to serialize keyring JSON: {}", e))?;
+    })
+    .map_err(|e| format!("Failed to serialize keyring JSON: {}", e))?;
 
     crate::modules::logger::log_info(&format!(
         "[Desktop] Writing token to system credential store for: {}",
@@ -163,7 +175,7 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
     // 2. 跨平台凭据注入
     #[cfg(target_os = "macos")]
     {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         let encoded_payload = STANDARD.encode(&payload_json);
         let full_keyring_value = format!("go-keyring-base64:{}", encoded_payload);
 
@@ -172,12 +184,27 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
         // 2.1 macOS Keychain Access
         // 删除旧的
         let _ = Command::new("security")
-            .args(["delete-generic-password", "-s", "gemini", "-a", account_name])
+            .args([
+                "delete-generic-password",
+                "-s",
+                "gemini",
+                "-a",
+                account_name,
+            ])
             .output();
 
         // 写入新的 (-A 参数允许所有本地应用免密码、无感直接读取凭据)
         let output = Command::new("security")
-            .args(["add-generic-password", "-s", "gemini", "-a", account_name, "-w", &full_keyring_value, "-A"])
+            .args([
+                "add-generic-password",
+                "-s",
+                "gemini",
+                "-a",
+                account_name,
+                "-w",
+                &full_keyring_value,
+                "-A",
+            ])
             .output()
             .map_err(|e| format!("Failed to execute security command: {}", e))?;
 
@@ -190,8 +217,8 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
     #[cfg(target_os = "windows")]
     {
         // 2.2 Windows Credential Manager direct Win32 API calls to write raw UTF-8 bytes
-        use std::ptr;
         use std::os::windows::ffi::OsStrExt;
+        use std::ptr;
 
         #[repr(C)]
         struct FILETIME {
@@ -241,7 +268,10 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
             cred_type: 1, // CRED_TYPE_GENERIC
             target_name: target_wide.as_ptr(),
             comment: ptr::null(),
-            last_written: FILETIME { dw_low_date_time: 0, dw_high_date_time: 0 },
+            last_written: FILETIME {
+                dw_low_date_time: 0,
+                dw_high_date_time: 0,
+            },
             credential_blob_size: secret.len() as u32,
             credential_blob: secret.as_ptr(),
             persist: 2, // CRED_PERSIST_LOCAL_MACHINE
@@ -269,7 +299,14 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
         use std::io::Write;
         let linux_account = if target_ide == Some("ide") { "antigravity-ide" } else { "antigravity" };
         let mut child = Command::new("secret-tool")
-            .args(["store", "--label=gemini", "service", "gemini", "username", linux_account])
+            .args([
+                "store",
+                "--label=gemini",
+                "service",
+                "gemini",
+                "username",
+                linux_account,
+            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -277,11 +314,13 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
             .map_err(|e| format!("Failed to spawn secret-tool: {}", e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(payload_json.as_bytes())
+            stdin
+                .write_all(payload_json.as_bytes())
                 .map_err(|e| format!("Failed to write to secret-tool stdin: {}", e))?;
         }
 
-        let output = child.wait_with_output()
+        let output = child
+            .wait_with_output()
             .map_err(|e| format!("Failed to wait for secret-tool: {}", e))?;
 
         if !output.status.success() {
@@ -290,7 +329,9 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
         }
     }
 
-    crate::modules::logger::log_info("[Desktop] Successfully wrote token to system credential store.");
+    crate::modules::logger::log_info(
+        "[Desktop] Successfully wrote token to system credential store.",
+    );
     Ok(())
 }
 
@@ -298,8 +339,15 @@ fn write_to_system_keyring(account: &crate::models::Account, target_ide: Option<
 pub struct HeadlessIntegration;
 
 impl SystemIntegration for HeadlessIntegration {
-    async fn on_account_switch(&self, account: &crate::models::Account, _target_ide: Option<&str>) -> Result<(), String> {
-        crate::modules::logger::log_info(&format!("[Headless] Account switched in memory: {}", account.email));
+    async fn on_account_switch(
+        &self,
+        account: &crate::models::Account,
+        _target_ide: Option<&str>,
+    ) -> Result<(), String> {
+        crate::modules::logger::log_info(&format!(
+            "[Headless] Account switched in memory: {}",
+            account.email
+        ));
         // Docker 模式下通常不直接控制宿主机的 VS Code 进程
         // 如果需要同步配置 to 某个 volume，可以在此处添加逻辑
         Ok(())
@@ -322,12 +370,18 @@ pub enum SystemManager {
 }
 
 impl SystemManager {
-    pub async fn on_account_switch(&self, account: &Account, target_ide: Option<&str>) -> Result<(), String> {
+    pub async fn on_account_switch(
+        &self,
+        account: &Account,
+        target_ide: Option<&str>,
+    ) -> Result<(), String> {
         match self {
             SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration { app_handle: handle.clone() };
+                let integration = DesktopIntegration {
+                    app_handle: handle.clone(),
+                };
                 integration.on_account_switch(account, target_ide).await
-            },
+            }
             SystemManager::Headless => {
                 let integration = HeadlessIntegration;
                 integration.on_account_switch(account, target_ide).await
@@ -337,7 +391,9 @@ impl SystemManager {
 
     pub fn update_tray(&self) {
         if let SystemManager::Desktop(handle) = self {
-            let integration = DesktopIntegration { app_handle: handle.clone() };
+            let integration = DesktopIntegration {
+                app_handle: handle.clone(),
+            };
             integration.update_tray();
         }
     }
@@ -345,9 +401,11 @@ impl SystemManager {
     pub fn show_notification(&self, title: &str, body: &str) {
         match self {
             SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration { app_handle: handle.clone() };
+                let integration = DesktopIntegration {
+                    app_handle: handle.clone(),
+                };
                 integration.show_notification(title, body);
-            },
+            }
             SystemManager::Headless => {
                 let integration = HeadlessIntegration;
                 integration.show_notification(title, body);
@@ -357,12 +415,18 @@ impl SystemManager {
 }
 
 impl SystemIntegration for SystemManager {
-    async fn on_account_switch(&self, account: &crate::models::Account, target_ide: Option<&str>) -> Result<(), String> {
+    async fn on_account_switch(
+        &self,
+        account: &crate::models::Account,
+        target_ide: Option<&str>,
+    ) -> Result<(), String> {
         match self {
             SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration { app_handle: handle.clone() };
+                let integration = DesktopIntegration {
+                    app_handle: handle.clone(),
+                };
                 integration.on_account_switch(account, target_ide).await
-            },
+            }
             SystemManager::Headless => {
                 let integration = HeadlessIntegration;
                 integration.on_account_switch(account, target_ide).await

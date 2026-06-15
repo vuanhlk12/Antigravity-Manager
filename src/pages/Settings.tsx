@@ -1614,7 +1614,7 @@ function Settings() {
                       {t("common.app_name", "Antigravity Tools")}
                     </h3>
                     <div className="flex items-center justify-center gap-2 text-sm">
-                      v4.2.1
+                      v4.2.2
                       <span className="text-gray-400 dark:text-gray-600">
                         •
                       </span>
